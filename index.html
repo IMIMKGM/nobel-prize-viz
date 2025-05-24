@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>共现关键词网络图</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    .node { stroke: #fff; stroke-width: 1.5px; cursor: pointer; }
+    .link { stroke: #999; stroke-opacity: 0.6; }
+    .tooltip {
+      position: absolute;
+      background-color: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 4px;
+      pointer-events: none;
+      font-size: 14px;
+    }
+    #controls {
+      margin-bottom: 15px;
+    }
+    input[type="text"] { margin-right: 10px; }
+  </style>
+</head>
+<body>
+  <h2>共现关键词网络图</h2>
+
+  <div id="controls">
+    <input type="text" id="filterBox1" placeholder="关键词1" />
+    <input type="text" id="filterBox2" placeholder="关键词2" />
+    <button id="searchBtn">搜索</button>
+    <button id="clearBtn">重置</button>
+    <br/><br/>
+    <label for="minValueRange">最小共现次数: <span id="minValueLabel">3</span></label>
+    <input type="range" id="minValueRange" min="3" max="10" value="3" step="1"/>
+    <div id="currentFilter">当前筛选条件：共现次数 ≥ <span id="currentMinValue">3</span></div>
+  </div>
+
+  <svg width="960" height="600"></svg>
+  <div class="tooltip" style="display: none;"></div>
+
+  <script>
+    const svg = d3.select("svg"),
+          width = +svg.attr("width"),
+          height = +svg.attr("height"),
+          g = svg.append("g");
+
+    const tooltip = d3.select(".tooltip");
+    let allNodes = [], allLinks = [], originalGraph;
+    let simulation;
+    let minValue = 3;
+
+    const minValueRange = d3.select("#minValueRange");
+    const minValueLabel = d3.select("#minValueLabel");
+    const currentMinValueSpan = d3.select("#currentMinValue");
+
+    d3.json("cooccurrence_network.json").then(function(graph) {
+      originalGraph = graph;
+
+      const nodeColorScale = d3.scaleLinear()
+        .domain(d3.extent(graph.nodes, d => d.weight || 0))
+        .range(["#d6eaf8", "#154360"]);  // 옅은 파랑 ~ 진한 파랑
+
+      const linkColorScale = d3.scaleLinear()
+        .domain(d3.extent(graph.links, d => d.value))
+        .range(["#ccc", "#d62728"]);
+
+      function processData() {
+        const linkCounts = {};
+        originalGraph.links.forEach(l => {
+          if (l.value >= minValue) {
+            linkCounts[l.source] = (linkCounts[l.source] || 0) + l.value;
+            linkCounts[l.target] = (linkCounts[l.target] || 0) + l.value;
+          }
+        });
+        originalGraph.nodes.forEach(n => {
+          n.weight = linkCounts[n.id] || 0;
+        });
+
+        allLinks = originalGraph.links.filter(l => l.value >= minValue);
+        const connectedIds = new Set();
+        allLinks.forEach(l => {
+          connectedIds.add(l.source);
+          connectedIds.add(l.target);
+        });
+        allNodes = originalGraph.nodes.filter(n => connectedIds.has(n.id));
+      }
+
+      function updateGraph(nodes, links, highlightKeywords = []) {
+        g.selectAll("*").remove();
+        tooltip.style("display", "none");
+
+        simulation = d3.forceSimulation(nodes)
+          .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+          .force("charge", d3.forceManyBody().strength(-300))
+          .force("center", d3.forceCenter(width / 2, height / 2));
+
+        const link = g.append("g").selectAll("line")
+          .data(links).enter().append("line")
+          .attr("class", "link")
+          .attr("stroke-width", d => Math.sqrt(d.value))
+          .attr("stroke", d => linkColorScale(d.value))
+          .on("mouseover", (event, d) => {
+            const source = typeof d.source === "object" ? d.source.id : d.source;
+            const target = typeof d.target === "object" ? d.target.id : d.target;
+            tooltip.style("display", "block").html(`关键词对: ${source} & ${target}<br/>共现次数: ${d.value}`);
+          })
+          .on("mousemove", event => {
+            tooltip.style("left", event.pageX + 10 + "px")
+                   .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", () => tooltip.style("display", "none"));
+
+        const node = g.append("g").selectAll("circle")
+          .data(nodes).enter().append("circle")
+          .attr("r", d => Math.sqrt(d.weight + 1) * 2.5)
+          .attr("fill", d => nodeColorScale(d.weight || 0))
+          .attr("class", "node")
+          .on("mouseover", (event, d) => {
+            tooltip.style("display", "block").html(`关键词: ${d.id}<br/>共现次数: ${d.weight}`);
+          })
+          .on("mousemove", event => {
+            tooltip.style("left", event.pageX + 10 + "px")
+                   .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", () => tooltip.style("display", "none"))
+          .call(d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended));
+
+        if (highlightKeywords.length > 0) {
+          const lower = highlightKeywords.map(k => k.toLowerCase());
+          node.attr("stroke", d => lower.includes(d.id.toLowerCase()) ? "red" : null)
+              .attr("stroke-width", d => lower.includes(d.id.toLowerCase()) ? 3 : 1.5)
+              .attr("opacity", d => lower.includes(d.id.toLowerCase()) ? 1 : 0.2);
+          link.attr("opacity", d => {
+            const s = (typeof d.source === "object" ? d.source.id : d.source).toLowerCase();
+            const t = (typeof d.target === "object" ? d.target.id : d.target).toLowerCase();
+            return (lower.includes(s) && lower.includes(t)) ? 1 : 0.1;
+          });
+        }
+
+        simulation.on("tick", () => {
+          link.attr("x1", d => d.source.x)
+              .attr("y1", d => d.source.y)
+              .attr("x2", d => d.target.x)
+              .attr("y2", d => d.target.y);
+
+          node.attr("cx", d => d.x)
+              .attr("cy", d => d.y);
+        });
+
+        // 👇 추가된 초기 zoom 축소
+        svg.transition().duration(750).call(
+          zoom.transform,
+          d3.zoomIdentity.translate(width / 2, height / 2).scale(0.5).translate(-width / 2, -height / 2)
+        );
+      }
+
+      function filterGraph() {
+        const kw1 = document.getElementById("filterBox1").value.toLowerCase().trim();
+        const kw2 = document.getElementById("filterBox2").value.toLowerCase().trim();
+        const keywords = [kw1, kw2].filter(k => k);
+
+        if (keywords.length === 0) {
+          updateGraph(allNodes, allLinks);
+          return;
+        }
+
+        const filteredNodes = allNodes.filter(n => keywords.includes(n.id.toLowerCase()));
+        const ids = new Set(filteredNodes.map(n => n.id));
+
+        const filteredLinks = allLinks.filter(l => {
+          const s = typeof l.source === "object" ? l.source.id : l.source;
+          const t = typeof l.target === "object" ? l.target.id : l.target;
+          return ids.has(s) && ids.has(t);
+        });
+
+        updateGraph(filteredNodes, filteredLinks, keywords);
+      }
+
+      d3.select("#searchBtn").on("click", filterGraph);
+
+      d3.select("#clearBtn").on("click", () => {
+        d3.select("#filterBox1").property("value", "");
+        d3.select("#filterBox2").property("value", "");
+        updateGraph(allNodes, allLinks);
+      });
+
+      minValueRange.on("input", function() {
+        minValue = +this.value;
+        minValueLabel.text(this.value);
+        currentMinValueSpan.text(this.value);
+        processData();
+        updateGraph(allNodes, allLinks);
+      });
+
+      const zoom = d3.zoom()
+        .scaleExtent([0.5, 5])
+        .on("zoom", (event) => g.attr("transform", event.transform));
+      svg.call(zoom);
+
+      processData();
+      updateGraph(allNodes, allLinks);
+    });
+
+    function dragstarted(event, d) {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x;
+      d.fy = d.y;
+    }
+
+    function dragged(event, d) {
+      d.fx = event.x;
+      d.fy = event.y;
+    }
+
+    function dragended(event, d) {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null;
+      d.fy = null;
+    }
+  </script>
+</body>
+</html>
