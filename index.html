@@ -1,432 +1,226 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>共现关键词网络图 & 国家/机构获奖趋势竞赛图</title>
+  <title>Nobel Papers Combined Visualization</title>
+  <link rel="stylesheet" href="style.css" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
-    body { font-family: sans-serif; margin: 20px; }
-    h2 { margin-top: 40px; margin-bottom: 10px; text-align: center; }
-
-    /* Network graph styles */
-    svg.network-graph {
-      border: 1px solid #ccc;
-      display: block;
-      margin: 0 auto 50px auto;
-      background-color: #f9f9f9;
-      width: 1200px;
-      height: 800px;
+    body {
+      font-family: Arial, sans-serif;
     }
-    .node { stroke: #fff; stroke-width: 1.5px; cursor: pointer; }
-    .link { stroke: #999; stroke-opacity: 0.6; }
     .tooltip {
       position: absolute;
-      background-color: rgba(0, 0, 0, 0.8);
-      color: white;
-      padding: 6px 10px;
-      border-radius: 4px;
-      pointer-events: none;
-      font-size: 14px;
-      display: none;
-    }
-
-    /* Trend chart styles */
-    #award-trend-chart {
-      width: 1200px;
-      height: 500px;
-      margin: 0 auto;
+      background-color: white;
       border: 1px solid #ccc;
-      background-color: #fff;
-    }
-    .area {
-      fill-opacity: 0.7;
-      cursor: pointer;
-    }
-    .legend {
-      font-size: 14px;
-      fill: #333;
-    }
-    .filter-box {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      margin-top: 10px;
-      gap: 10px;
-      max-width: 1200px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    .filter-box label {
-      user-select: none;
-      cursor: pointer;
-      font-size: 14px;
+      padding: 6px;
+      pointer-events: none;
+      font-size: 12px;
     }
   </style>
 </head>
 <body>
-
-  <!-- 네트워크 그래프 -->
-  <h2>共现关键词网络图</h2>
-  <label for="linkThreshold">最小共现次数 (链接阈值): </label>
-  <input type="range" id="linkThreshold" min="1" max="10" value="3" step="1">
-  <span id="thresholdValue">3</span>
-
-  <div style="margin-top: 10px; margin-bottom: 20px;">
-    <input type="text" id="keywordInput" placeholder="关键词搜索..." />
-    <button id="searchBtn">搜索</button>
-    <button id="resetBtn">重置</button>
-  </div>
-
-  <svg class="network-graph"></svg>
-  <div class="tooltip"></div>
-
-  <!-- 누적 영역 그래프 -->
-  <h2>国家/机构获奖趋势竞赛图 (누적 영역 그래프)</h2>
-
-  <div style="text-align: center; margin-top: 20px;">
-    <label for="yearRange">选择年份范围（연도 범위 선택）: </label>
-    <input type="range" id="yearRange" min="1900" max="2020" value="2020" step="1" />
-    <span id="yearValue">2020</span>
-  </div>
-
-  <div class="filter-box" id="countryFilterBox"></div>
-
-  <svg id="award-trend-chart"></svg>
+  <!-- 첫 번째 그래프 -->
+  <h2>Average Number of Papers per Year Relative to Nobel Prize</h2>
+  <svg id="chart1" width="900" height="600"></svg>
 
   <script>
-    // 네트워크 그래프 스크립트
-    const svgNetwork = d3.select("svg.network-graph");
-    const gNetwork = svgNetwork.append("g");
-    const tooltip = d3.select(".tooltip");
+    const margin = { top: 50, right: 50, bottom: 50, left: 60 },
+          width = 900 - margin.left - margin.right,
+          height = 500 - margin.top - margin.bottom;
 
-    const width2 = +svgNetwork.attr("width") || 1200;
-    const height2 = +svgNetwork.attr("height") || 800;
+    const svg = d3.select("#chart1")
+                  .attr("width", width + margin.left + margin.right)
+                  .attr("height", height + margin.top + margin.bottom);
 
-    let simulation;
-    let currentNodes = [];
-    let currentLinks = [];
+    const g = svg.append("g")
+                 .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    const linkThresholdInput = d3.select("#linkThreshold");
-    const thresholdValueSpan = d3.select("#thresholdValue");
+    const tooltip = d3.select("body").append("div")
+                      .attr("class", "tooltip")
+                      .style("opacity", 0);
 
-    const keywordInput = d3.select("#keywordInput");
-    const searchBtn = d3.select("#searchBtn");
-    const resetBtn = d3.select("#resetBtn");
-
-    d3.json("cooccurrence_network.json").then(function(graph) {
-      const totalLinkCounts = {};
-      graph.links.forEach(l => {
-        totalLinkCounts[l.source] = (totalLinkCounts[l.source] || 0) + l.value;
-        totalLinkCounts[l.target] = (totalLinkCounts[l.target] || 0) + l.value;
-      });
-      graph.nodes.forEach(n => {
-        n.totalWeight = totalLinkCounts[n.id] || 0;
-      });
-
-      const nodeColorScale = d3.scaleLinear()
-        .domain(d3.extent(graph.nodes, d => d.totalWeight))
-        .range(["#aed6f1", "#154360"]);
-
-      const linkColorScale = d3.scaleLinear()
-        .domain(d3.extent(graph.links, d => d.value))
-        .range(["#ccc", "#d62728"]);
-
-      function filterData(threshold) {
-        const filteredLinks = graph.links.filter(l => l.value >= threshold);
-        const connectedIds = new Set();
-        filteredLinks.forEach(l => {
-          connectedIds.add(l.source);
-          connectedIds.add(l.target);
-        });
-        const filteredNodes = graph.nodes.filter(n => connectedIds.has(n.id));
-        const nodeById = new Map(filteredNodes.map(n => [n.id, n]));
-        const linksWithNodes = filteredLinks.map(l => ({
-          source: nodeById.get(l.source),
-          target: nodeById.get(l.target),
-          value: l.value
-        }));
-        return { nodes: filteredNodes, links: linksWithNodes };
-      }
-
-      function updateGraph(nodes, links) {
-        currentNodes = nodes;
-        currentLinks = links;
-
-        if (simulation) simulation.stop();
-        tooltip.style("display", "none");
-
-        // 페이드 아웃 후 삭제
-        gNetwork.selectAll(".link").transition().duration(300).style("opacity", 0).remove();
-        gNetwork.selectAll(".node").transition().duration(300).style("opacity", 0).remove();
-
-        simulation = d3.forceSimulation(nodes)
-          .force("link", d3.forceLink(links).id(d => d.id).distance(60))
-          .force("charge", d3.forceManyBody().strength(-300))
-          .force("center", d3.forceCenter(width2 / 2, height2 / 2));
-
-        const link = gNetwork.append("g").attr("class", "links").selectAll("line")
-          .data(links, d => d.source.id + "-" + d.target.id)
-          .enter().append("line")
-          .attr("class", "link")
-          .attr("stroke-width", d => Math.sqrt(d.value))
-          .attr("stroke", d => linkColorScale(d.value))
-          .style("opacity", 0)
-          .on("mouseover", (event, d) => {
-            tooltip.style("display", "block")
-              .html(`${d.source.id} ↔ ${d.target.id}<br/>共现次数: ${d.value}`);
-          })
-          .on("mousemove", event => {
-            tooltip.style("left", (event.pageX + 10) + "px")
-                   .style("top", (event.pageY + 10) + "px");
-          })
-          .on("mouseout", () => tooltip.style("display", "none"))
-          .transition().duration(600).style("opacity", 1);
-
-        const node = gNetwork.append("g").attr("class", "nodes").selectAll("circle")
-          .data(nodes, d => d.id)
-          .enter().append("circle")
-          .attr("r", d => Math.sqrt(d.totalWeight + 1) * 2.5)
-          .attr("fill", d => nodeColorScale(d.totalWeight))
-          .attr("class", "node")
-          .style("opacity", 0)
-          .on("mouseover", (event, d) => {
-            tooltip.style("display", "block")
-              .html(`关键词: ${d.id}<br/>出现次数: ${d.totalWeight}`);
-          })
-          .on("mousemove", event => {
-            tooltip.style("left", (event.pageX + 10) + "px")
-                   .style("top", (event.pageY + 10) + "px");
-          })
-          .on("mouseout", () => tooltip.style("display", "none"))
-          .call(d3.drag()
-            .on("start", dragstarted)
-            .on("drag", dragged)
-            .on("end", dragended))
-          .transition().duration(600).style("opacity", 1);
-
-        simulation.on("tick", () => {
-          link.attr("x1", d => d.source.x)
-              .attr("y1", d => d.source.y)
-              .attr("x2", d => d.target.x)
-              .attr("y2", d => d.target.y);
-
-          node.attr("cx", d => d.x)
-              .attr("cy", d => d.y);
-        });
-      }
-
-      function dragstarted(event, d) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      }
-      function dragged(event, d) {
-        d.fx = event.x;
-        d.fy = event.y;
-      }
-      function dragended(event, d) {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-      }
-
-      function searchAndHighlight(keyword) {
-        if (!keyword) return;
-        const lowerKeyword = keyword.trim().toLowerCase();
-        const matchedNode = currentNodes.find(n => n.id.toLowerCase() === lowerKeyword);
-        if (matchedNode) {
-          simulation.alphaTarget(0.3).restart();
-          // 노드 강조
-          gNetwork.selectAll(".node").attr("fill-opacity", d => d === matchedNode ? 1 : 0.1);
-          gNetwork.selectAll(".link").attr("stroke-opacity", d =>
-            d.source === matchedNode || d.target === matchedNode ? 1 : 0.05);
-          // 중심 이동
-          matchedNode.fx = width2 / 2;
-          matchedNode.fy = height2 / 2;
-          simulation.restart();
-        } else {
-          alert("未找到关键词：" + keyword);
-        }
-      }
-
-      function resetHighlight() {
-        gNetwork.selectAll(".node").attr("fill-opacity", 1);
-        gNetwork.selectAll(".link").attr("stroke-opacity", 0.6);
-        currentNodes.forEach(n => { n.fx = null; n.fy = null; });
-        simulation.alphaTarget(0).restart();
-      }
-
-      linkThresholdInput.on("input", function() {
-        const val = +this.value;
-        thresholdValueSpan.text(val);
-        const filtered = filterData(val);
-        updateGraph(filtered.nodes, filtered.links);
-        resetHighlight();
-      });
-
-      searchBtn.on("click", () => {
-        const kw = keywordInput.property("value");
-        searchAndHighlight(kw);
-      });
-
-      resetBtn.on("click", () => {
-        resetHighlight();
-        keywordInput.property("value", "");
-      });
-
-      // 초기값
-      const initialThreshold = +linkThresholdInput.property("value");
-      const filteredData = filterData(initialThreshold);
-      updateGraph(filteredData.nodes, filteredData.links);
-
-    });
-
-    // ==========================
-    // 누적 영역 그래프 스크립트 (trend.js 내용 통합)
-    // ==========================
-
-    const svgTrend = d3.select("#award-trend-chart");
-    const margin = { top: 50, right: 50, bottom: 60, left: 80 };
-    const width = +svgTrend.attr("width") || 1200;
-    const height = +svgTrend.attr("height") || 500;
-    const innerWidth = width - margin.left - margin.right;
-    const innerHeight = height - margin.top - margin.bottom;
-
-    const trendG = svgTrend.append("g")
-      .attr("transform", `translate(${margin.left},${margin.top})`);
-
-    let allData = null;
-    let filteredYear = 2020;
-    let selectedCountries = new Set();
-
-    d3.csv("award_trend_data.csv").then(data => {
+    d3.csv("linechart_data.csv").then(data => {
       data.forEach(d => {
-        d.year = +d.year;
-        d.value = +d.value;
+        d.RelYear = +d.RelYear;
+        d.AvgPerYear = +d.AvgPerYear;
       });
 
-      // 모든 국가 목록 추출
-      const allCountries = Array.from(new Set(data.map(d => d.country)));
+      const x = d3.scaleLinear()
+                  .domain(d3.extent(data, d => d.RelYear))
+                  .range([0, width]);
 
-      // 기본으로 전체 선택
-      allCountries.forEach(c => selectedCountries.add(c));
+      const y = d3.scaleLinear()
+                  .domain([0, d3.max(data, d => d.AvgPerYear)]).nice()
+                  .range([height, 0]);
 
-      // 컬러 스케일
-      const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allCountries);
+      const xAxisGroup = g.append("g")
+                          .attr("transform", `translate(0, ${height})`);
 
-      // 필터 박스에 체크박스 생성
-      const filterBox = d3.select("#countryFilterBox");
-      allCountries.forEach(c => {
-        const id = `chk-${c.replace(/\s+/g, '')}`;
-        const label = filterBox.append("label");
-        label.append("input")
-          .attr("type", "checkbox")
-          .attr("id", id)
-          .attr("checked", true)
-          .on("change", (event) => {
-            if (event.target.checked) selectedCountries.add(c);
-            else selectedCountries.delete(c);
-            updateTrendChart();
-          });
-        label.append("span").text(c);
-      });
+      const yAxisGroup = g.append("g");
 
-      allData = data;
+      const xAxis = d3.axisBottom(x).ticks(10);
+      const yAxis = d3.axisLeft(y);
 
-      // 축 스케일
-      const xScale = d3.scaleLinear().range([0, innerWidth]);
-      const yScale = d3.scaleLinear().range([innerHeight, 0]);
+      xAxisGroup.call(xAxis);
+      yAxisGroup.call(yAxis);
 
-      const xAxis = trendG.append("g")
-        .attr("transform", `translate(0,${innerHeight})`);
-      const yAxis = trendG.append("g");
+      // 배경색
+      g.append("rect")
+       .attr("x", 0)
+       .attr("y", 0)
+       .attr("width", x(0))
+       .attr("height", height)
+       .attr("fill", "#f0f8ff");
 
-      // 영역 생성기
-      const area = d3.area()
-        .x(d => xScale(d.data.year))
-        .y0(d => yScale(d[0]))
-        .y1(d => yScale(d[1]));
+      g.append("rect")
+       .attr("x", x(0))
+       .attr("y", 0)
+       .attr("width", width - x(0))
+       .attr("height", height)
+       .attr("fill", "#fffaf0");
 
-      function updateTrendChart() {
-        const yearMax = filteredYear;
+      // 빨간 기준선과 텍스트
+      const zeroLine = g.append("line")
+       .attr("stroke", "red")
+       .attr("stroke-width", 2)
+       .attr("stroke-dasharray", "4 2");
 
-        // 선택 국가 및 연도 필터링
-        let filtered = allData.filter(d => d.year <= yearMax && selectedCountries.has(d.country));
+      const zeroText = g.append("text")
+       .attr("fill", "red")
+       .style("font-weight", "bold")
+       .style("font-size", "13px")
+       .text("诺奖得奖年份");
 
-        // 데이터를 국가별, 연도별로 그룹화하고 누적합 준비
-        const nested = d3.group(filtered, d => d.year);
+      // "得奖前" 텍스트 (고정 위치)
+      g.append("text")
+       .attr("x", x(0) / 2)
+       .attr("y", 20)
+       .text("得奖前")
+       .attr("fill", "#333")
+       .style("font-size", "14px");
 
-        // 연도 리스트 만들기 (연도 오름차순)
-        const years = Array.from(new Set(filtered.map(d => d.year))).sort((a, b) => a - b);
+      // "得奖后" 텍스트 (고정 위치)
+      g.append("text")
+       .attr("x", x(0) + (width - x(0)) / 2)
+       .attr("y", 20)
+       .text("得奖后")
+       .attr("fill", "#333")
+       .style("font-size", "14px");
 
-        // 국가별 value 합산을 위해 Map 형식으로 변환
-        const dataByYear = years.map(year => {
-          const yearGroup = nested.get(year) || [];
-          const obj = { year: year };
-          allCountries.forEach(c => {
-            const entry = yearGroup.find(d => d.country === c);
-            obj[c] = entry ? entry.value : 0;
-          });
-          return obj;
+      const avgValue = d3.mean(data, d => d.AvgPerYear);
+
+      // 초록 평균선과 텍스트 + 마우스 오버 툴팁 이벤트 추가
+      const avgLine = g.append("line")
+        .attr("class", "avg-line")
+        .attr("stroke", "green")
+        .attr("stroke-width", 2)
+        .attr("stroke-dasharray", "4 4")
+        .on("mouseover", (event) => {
+          tooltip.transition().duration(200).style("opacity", 0.9);
+          tooltip.html(`平均值: ${avgValue.toFixed(2)}`)
+            .style("left", (event.pageX + 10) + "px")
+            .style("top", (event.pageY - 28) + "px");
+        })
+        .on("mouseout", () => {
+          tooltip.transition().duration(500).style("opacity", 0);
         });
 
-        // 스케일 도메인 설정
-        xScale.domain(d3.extent(years));
-        yScale.domain([0, d3.max(dataByYear, d => {
-          let sum = 0;
-          selectedCountries.forEach(c => sum += d[c] || 0);
-          return sum;
-        })]);
+      const avgText = g.append("text")
+       .attr("fill", "green")
+       .style("font-size", "13px")
+       .style("font-weight", "bold")
+       .text("平均值");
 
-        // 축 업데이트
-        xAxis.call(d3.axisBottom(xScale).tickFormat(d3.format("d")));
-        yAxis.call(d3.axisLeft(yScale));
+      // 줌 대상 그룹
+      const zoomGroup = g.append("g").attr("class", "zoom-layer");
 
-        // 스택 데이터 준비
-        const stack = d3.stack()
-          .keys(allCountries.filter(c => selectedCountries.has(c)))
-          .order(d3.stackOrderNone)
-          .offset(d3.stackOffsetNone);
+      const line = d3.line()
+                     .x(d => x(d.RelYear))
+                     .y(d => y(d.AvgPerYear));
 
-        const series = stack(dataByYear);
+      const path = zoomGroup.append("path")
+         .datum(data)
+         .attr("fill", "none")
+         .attr("stroke", "steelblue")
+         .attr("stroke-width", 2)
+         .attr("d", line);
 
-        // 데이터 바인딩
-        const areas = trendG.selectAll(".area")
-          .data(series, d => d.key);
+      const dots = zoomGroup.selectAll("circle")
+         .data(data)
+         .enter().append("circle")
+         .attr("cx", d => x(d.RelYear))
+         .attr("cy", d => y(d.AvgPerYear))
+         .attr("r", 4)
+         .attr("fill", "orange")
+         .on("mouseover", (event, d) => {
+           const yearLabel = d.RelYear > 0 ? +d.RelYear : d.RelYear;
+           tooltip.transition().duration(200).style("opacity", 0.9);
+           tooltip.html(`Year: ${yearLabel}<br>Avg: ${d.AvgPerYear.toFixed(2)}`)
+                  .style("left", (event.pageX + 10) + "px")
+                  .style("top", (event.pageY - 28) + "px");
+         })
+         .on("mouseout", () => tooltip.transition().duration(500).style("opacity", 0));
 
-        // ENTER + UPDATE
-        areas.enter()
-          .append("path")
-          .attr("class", "area")
-          .attr("fill", d => colorScale(d.key))
-          .merge(areas)
-          .transition()
-          .duration(700)
-          .attr("d", area);
+      // 줌 기능
+      const zoom = d3.zoom()
+        .scaleExtent([1, 8])
+        .translateExtent([[0, 0], [width, height]])
+        .extent([[0, 0], [width, height]])
+        .on("zoom", (event) => {
+          const transform = event.transform;
+          const zx = transform.rescaleX(x);
+          const zy = transform.rescaleY(y);
 
-        // EXIT
-        areas.exit().remove();
-      }
+          xAxisGroup.call(d3.axisBottom(zx).ticks(10));
+          yAxisGroup.call(d3.axisLeft(zy));
 
-      // 초기 렌더링
-      updateTrendChart();
+          path.attr("d", d3.line()
+            .x(d => zx(d.RelYear))
+            .y(d => zy(d.AvgPerYear)));
 
-      // 연도 범위 슬라이더
-      const yearRangeInput = d3.select("#yearRange");
-      const yearValueSpan = d3.select("#yearValue");
-      yearRangeInput.attr("min", d3.min(allData, d => d.year));
-      yearRangeInput.attr("max", d3.max(allData, d => d.year));
-      yearRangeInput.property("value", d3.max(allData, d => d.year));
-      yearValueSpan.text(yearRangeInput.property("value"));
+          dots.attr("cx", d => zx(d.RelYear))
+              .attr("cy", d => zy(d.AvgPerYear));
 
-      yearRangeInput.on("input", function() {
-        filteredYear = +this.value;
-        yearValueSpan.text(filteredYear);
-        updateTrendChart();
-      });
+          // 빨간 기준선 위치 업데이트
+          zeroLine
+            .attr("x1", zx(0))
+            .attr("x2", zx(0))
+            .attr("y1", 0)
+            .attr("y2", height);
 
+          zeroText
+            .attr("x", zx(0) - 40)
+            .attr("y", -10);
+
+          // 초록 평균선 위치 업데이트
+          avgLine
+            .attr("x1", 0)
+            .attr("x2", width)
+            .attr("y1", zy(avgValue))
+            .attr("y2", zy(avgValue));
+
+          avgText
+            .attr("x", width - 80)
+            .attr("y", zy(avgValue) - 6);
+        });
+
+      // 초기 위치 지정
+      zeroLine.attr("x1", x(0)).attr("x2", x(0)).attr("y1", 0).attr("y2", height);
+      zeroText.attr("x", x(0) - 40).attr("y", -10);
+
+      avgLine.attr("x1", 0).attr("x2", width).attr("y1", y(avgValue)).attr("y2", y(avgValue));
+      avgText.attr("x", width - 80).attr("y", y(avgValue) - 6);
+
+      svg.call(zoom);
     });
   </script>
+
+  <!-- 두 번째 그래프 -->
+  <h2>Sample Embedding Visualization</h2>
+  <div id="chart2"></div>
+
+  <script src="main.js"></script>
 
 </body>
 </html>
